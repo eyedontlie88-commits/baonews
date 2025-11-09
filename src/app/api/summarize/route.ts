@@ -1,16 +1,20 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { db } from '@/lib/db';
 
-const HF_MODEL = 'VietAI/vit5-base-vietnews-summarization'; // base warm-up nhanh hơn; có thể đổi sang vit5-large khi ổn
-const HF_URL = `https://router.huggingface.co/hf-inference/models/${HF_MODEL}`;
+const HF_ENDPOINT =
+  'https://router.huggingface.co/hf-inference/models/VietAI/vit5-base-vietnews-summarization';
 
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { text } = body ?? {};
+    const { articleId, text } = body as { articleId?: string; text?: string };
 
     // Validate input
     if (!text || typeof text !== 'string') {
       return NextResponse.json({ error: 'Text is required' }, { status: 400 });
+    }
+    if (!articleId) {
+      return NextResponse.json({ error: 'articleId is required' }, { status: 400 });
     }
 
     // Check for API key
@@ -19,69 +23,71 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'HF_API_KEY not configured' }, { status: 500 });
     }
 
-    // ---- Call Hugging Face API (timeout + retry if 503) ----
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 20_000); // 20s
+    // Helper to call HF API with timeout
+    const callHF = async () => {
+      const ctrl = new AbortController();
+      const t = setTimeout(() => ctrl.abort(), 20_000);
+      try {
+        const r = await fetch(HF_ENDPOINT, {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${apiKey}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ inputs: text }),
+          signal: ctrl.signal,
+        });
+        clearTimeout(t);
+        return r;
+      } catch (e) {
+        clearTimeout(t);
+        throw e;
+      }
+    };
 
-    let response = await fetch(HF_URL, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${apiKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ inputs: text }),
-      signal: controller.signal,
-    });
-    clearTimeout(timeout);
-
-    // If model is loading (503), wait then retry once
+    let response = await callHF();
     if (response.status === 503) {
-      await new Promise((r) => setTimeout(r, 15_000)); // wait 15s
-      response = await fetch(HF_URL, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${apiKey}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ inputs: text }),
-      });
+      await new Promise((r) => setTimeout(r, 15_000)); // warm-up
+      response = await callHF();
     }
 
     if (!response.ok) {
-      const errorText = await response.text().catch(() => '');
-      console.error('Hugging Face API error:', response.status, errorText);
+      const err = await response.text();
+      console.error('HF error:', err);
       return NextResponse.json({ error: 'Failed to generate summary' }, { status: response.status });
     }
 
     const data = await response.json();
-
-    // Parse result (HF router can return summary_text or generated_text)
     let summary = '';
-    if (Array.isArray(data) && data.length > 0) {
-      summary = data[0]?.summary_text || data[0]?.generated_text || '';
+    if (Array.isArray(data) && data.length) {
+      summary = data[0].summary_text || data[0].generated_text || '';
     } else if (data?.summary_text) {
       summary = data.summary_text;
     } else if (data?.generated_text) {
       summary = data.generated_text;
     }
-
     if (!summary) {
       return NextResponse.json({ error: 'No summary generated' }, { status: 500 });
     }
 
+    // Lưu/Update vào bảng Rewrite
+    const saved = await db.rewrite.upsert({
+      where: { articleId },
+      update: { content: summary },
+      create: { articleId, content: summary },
+      select: { id: true, articleId: true, content: true, createdAt: true },
+    });
+
     return NextResponse.json(
-      { summary },
-      { headers: { 'Cache-Control': 'no-store' } }
+      { summary, saved },
+      { headers: { 'Cache-Control': 'no-store' } },
     );
   } catch (err: any) {
-    console.error('Error in summarize API:', err?.message || err);
-    // Distinguish abort timeout
-    if (err?.name === 'AbortError') {
-      return NextResponse.json({ error: 'Summarization timed out' }, { status: 504 });
-    }
+    console.error('summarize API error:', err);
+    const isAbort = err?.name === 'AbortError';
     return NextResponse.json(
-      { error: 'Internal server error' },
-      { status: 500, headers: { 'Cache-Control': 'no-store' } }
+      { error: isAbort ? 'Summarization timed out' : 'Internal server error' },
+      { status: isAbort ? 504 : 500, headers: { 'Cache-Control': 'no-store' } },
     );
   }
 }

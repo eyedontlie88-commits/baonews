@@ -30,7 +30,12 @@ export default function NewsGrid() {
   useEffect(() => {
     async function fetchArticles() {
       try {
-        const response = await fetch('/api/articles');
+        const baseUrl =
+          process.env.NEXT_PUBLIC_SITE_URL || 'http://localhost:3000';
+        const response = await fetch(`${baseUrl}/api/articles`, {
+          cache: 'no-store',
+          next: { revalidate: 0 },
+        });
         const data = await response.json();
         
         if (data.success) {
@@ -67,7 +72,7 @@ export default function NewsGrid() {
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ text: textToSummarize }),
+        body: JSON.stringify({ articleId: article.id, text: textToSummarize }),
       });
 
       const data = await response.json();
@@ -156,7 +161,9 @@ export default function NewsGrid() {
 
             {/* Title */}
             <h3 className="text-lg font-bold text-gray-900 mb-2 line-clamp-2">
-              {article.title}
+              <a href={`/article/${article.id}`} className="hover:underline">
+                {article.title}
+              </a>
             </h3>
 
             {/* Description */}
@@ -168,20 +175,19 @@ export default function NewsGrid() {
 
             {/* Action Buttons */}
             <div className="flex gap-2">
-              <button
-                className="flex-1 bg-purple-600 hover:bg-purple-700 disabled:bg-gray-400 text-white text-sm px-3 py-2 rounded transition-colors"
-                onClick={() => handleSummarize(article)}
-                disabled={summaries[article.id]?.loading}
-              >
-                {summaries[article.id]?.loading ? '⏳ Đang tóm tắt...' : '🧠 Tóm tắt AI'}
-              </button>
               <a
                 href={article.url}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="flex-1 bg-green-600 hover:bg-green-700 text-white text-sm px-3 py-2 rounded text-center transition-colors"
               >
-                🔗 Đọc bài gốc
+                📖 Đọc bài gốc
+              </a>
+              <a
+                href={`/article/${article.id}`}
+                className="flex-1 bg-slate-700 hover:bg-slate-800 text-white text-sm px-3 py-2 rounded text-center transition-colors"
+              >
+                🔎 Chi tiết
               </a>
             </div>
 
