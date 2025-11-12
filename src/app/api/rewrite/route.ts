@@ -4,6 +4,15 @@ import { db } from '@/lib/db';
 const HF_ENDPOINT =
   'https://router.huggingface.co/hf-inference/models/VietAI/vit5-base-vietnews-summarization';
 
+// GET handler - API info
+export async function GET() {
+  return NextResponse.json({
+    message: 'API /api/rewrite is working!',
+    methods: ['POST'],
+  });
+}
+
+// POST handler - Rewrite/summarize article
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
@@ -11,7 +20,10 @@ export async function POST(request: NextRequest) {
 
     // Validate articleId
     if (!articleId) {
-      return NextResponse.json({ error: 'articleId is required' }, { status: 400 });
+      return NextResponse.json(
+        { success: false, error: 'articleId is required' },
+        { status: 400 }
+      );
     }
 
     // Check if summary already exists
@@ -21,7 +33,13 @@ export async function POST(request: NextRequest) {
 
     if (existingRewrite) {
       return NextResponse.json(
-        { summary: existingRewrite.content },
+        {
+          success: true,
+          articleId,
+          summary: existingRewrite.content,
+          rewrittenContent: existingRewrite.content,
+          timestamp: existingRewrite.createdAt.toISOString(),
+        },
         { headers: { 'Cache-Control': 'no-store' } }
       );
     }
@@ -106,14 +124,23 @@ export async function POST(request: NextRequest) {
     });
 
     return NextResponse.json(
-      { summary, saved },
+      {
+        success: true,
+        articleId,
+        summary,
+        rewrittenContent: summary,
+        timestamp: saved.createdAt.toISOString(),
+      },
       { headers: { 'Cache-Control': 'no-store' } }
     );
   } catch (err: any) {
     console.error('rewrite API error:', err);
     const isAbort = err?.name === 'AbortError';
     return NextResponse.json(
-      { error: isAbort ? 'Summarization timed out' : 'Internal server error' },
+      {
+        success: false,
+        error: isAbort ? 'Summarization timed out' : 'Internal server error',
+      },
       { status: isAbort ? 504 : 500, headers: { 'Cache-Control': 'no-store' } }
     );
   }
