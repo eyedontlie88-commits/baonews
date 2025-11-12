@@ -28,27 +28,35 @@ export default function NewsGrid() {
   const [summaries, setSummaries] = useState<SummaryState>({});
 
   useEffect(() => {
+    const controller = new AbortController();
+    
     async function fetchArticles() {
       try {
-        const baseUrl =
-          process.env.NEXT_PUBLIC_SITE_URL || 'http://localhost:3000';
-        const response = await fetch(`${baseUrl}/api/articles`, {
+        const response = await fetch('/api/articles', {
           cache: 'no-store',
-          next: { revalidate: 0 },
+          signal: controller.signal,
         });
+        
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}`);
+        }
+        
         const data = await response.json();
         
         if (data.success) {
           setArticles(data.articles);
         }
-      } catch (error) {
-        console.error('Error fetching articles:', error);
+      } catch (error: any) {
+        if (error.name !== 'AbortError') {
+          console.error('Error fetching articles:', error);
+        }
       } finally {
         setLoading(false);
       }
     }
 
     fetchArticles();
+    return () => controller.abort();
   }, []);
 
   const formatDate = (date: Date | null) => {
